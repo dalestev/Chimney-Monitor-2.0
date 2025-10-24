@@ -1,6 +1,7 @@
 /*
  * main.cpp
  * Main project file for ESP32 ThingsBoard Client
+ * (Refactored for Simple Deep Sleep with "Pull" OTA on wake)
  */
 
 #include <Arduino.h>
@@ -11,73 +12,75 @@
 #include "ShtManager.h"
 #include "ChimneyProbe.h"
 
-// Initialize our ConnectionManager
+// --- Global Objects ---
 ConnectionManager conn(TB_MQTT_HOST, TB_MQTT_PORT, TB_HTTP_HOST);
-
-
-//Init BatteryManager
 BatteryManager batt;
-
-
-//  Init SHT30 Manager
 ShtManager sht;
-
-
-// Init ChimneyProbe
 ChimneyProbe chimney;
 
-// Timer for sending data
-unsigned long lastSend = 0;
+// --- Forward Declarations ---
+void initSensors();
+bool connectAll();
+void sendTelemetryData();
+void goToSleep();
+void onMqttMessage(char* topic, byte* payload, unsigned int length);
 
-// Flag to track if we've sent initial attributes
-bool attributes_sent = false;
-
-// --- MQTT Message Callback ---
-// This function is called every time a message arrives
-void onMqttMessage(char* topic, byte* payload, unsigned int length) {
-  Serial.println("---");
-  Serial.print("Message arrived on topic: ");
-  Serial.println(topic);
-
-  // Copy payload to a new buffer to null-terminate it
-  char message[length + 1];
-  memcpy(message, payload, length);
-  message[length] = '\0';
-  Serial.print("Message: ");
-  Serial.println(message);
-
-  // Check if this is a shared attribute update (for OTA)
-  if (strcmp(topic, "v1/devices/me/attributes") == 0) {
-    JsonDocument doc;
-    deserializeJson(doc, message);
-
-    // Check if the message contains new firmware info
-    // Use the modern ArduinoJson 7 check:
-    if (doc["fw_version"].is<const char*>()) {
-      const char* fw_title = doc["fw_title"];
-      const char* fw_version = doc["fw_version"];
-      
-      Serial.printf("Received new firmware info. Title: %s, Version: %s\n", fw_title, fw_version);
-
-      // Compare with our current version
-      if (strcmp(fw_version, FIRMWARE_VERSION) != 0) {
-        Serial.println("New firmware detected! Starting OTA update process...");
-        // Call performOtaUpdate without the token, as the class now stores it
-        conn.performOtaUpdate(fw_title, fw_version);
-      } else {
-        Serial.println("Firmware is already up to date.");
-      }
-    }
-  }
-}
 
 // --- Setup ---
+// Runs ONCE on every wake-up (from deep sleep or power-on)
 void setup() {
   Serial.begin(115200);
-  while (!Serial) {
-    delay(10); // Wait for serial
+  while (!Serial) { delay(10); }
+
+  Serial.println("\n--- WAKING UP ---");
+
+  initSensors();
+
+  // Connect to Wi-Fi & ThingsBoard.
+  // This function also pauses to listen for the automatic attribute update.
+  if (connectAll()) {
+    
+    // If the code reaches this point, it means connectAll() finished
+    // AND onMqttMessage() did NOT trigger an OTA update.
+    
+    Serial.println("Firmware check complete, no new version. Sending telemetry...");
+
+    // Send this boot's attributes (fw_state, etc.)
+    JsonDocument doc;
+    doc["fw_title"] = FIRMWARE_TITLE;
+    doc["fw_version"] = FIRMWARE_VERSION;
+    doc["fw_state"] = "IDLE";
+    char attr_payload[150];
+    serializeJson(doc, attr_payload);
+    conn.sendAttributes(attr_payload);
+    conn.loop(); // Give a moment to send
+    delay(100);
+
+    // Send sensor data
+    sendTelemetryData();
+    Serial.println("Telemetry sent.");
+    conn.loop(); // Give MQTT time to send
+    delay(200);
+
+  } else {
+    Serial.println("Failed to connect. Sleeping anyway.");
+    // (This is where you would add data to a "failed send" queue)
   }
 
+  // Go back to sleep
+  goToSleep();
+}
+
+
+// --- Main Loop ---
+// This will never be reached.
+void loop() {
+}
+
+
+// --- Helper Functions ---
+
+void initSensors() {
   Wire.begin();
 
   if (batt.begin(&Wire, LC709203F_APA_500MAH)) {
@@ -86,86 +89,120 @@ void setup() {
     Serial.println("WARNING: Battery monitor not found!");
   }
 
-
   if (sht.begin()) {
-    Serial.println("SHT30 sensor initialized. Warming up...");
-    Serial.printf("Initial Ambient Temp: %.2f F", sht.getTemperature());
-
+    Serial.println("SHT30 sensor initialized.");
+    Serial.println(sht.getTemperature());
   } else {
     Serial.println("WARNING: SHT30 sensor not found!");
   }
 
   Serial.println("Chimney Probe Initialized...Delaying First Read");
-  delay(500);
-  Serial.printf("Initial Chimney Temp: %.2f F\n", chimney.getTemperature());
+  delay(500); // Wait for MAX6675 to stabilize
+}
 
-
-  // Connect to Wi-Fi and ThingsBoard
+bool connectAll() {
   conn.connectWifi(WIFI_SSID, WIFI_PASS);
   
-  // Pass the token to be stored in the class
-  conn.connectThingsboard(TB_DEVICE_TOKEN); 
-  
-  // Set our callback function
+  // Set the callback *before* connecting
   conn.setCallback(onMqttMessage); 
+  
+  conn.connectThingsboard(TB_DEVICE_TOKEN); 
+
+  // Wait for connection
+  unsigned long connect_start = millis();
+  while (!conn.isConnected() && (millis() - connect_start < 15000)) {
+    // Wait up to 15 seconds to connect
+    conn.loop();
+    delay(100);
+  }
+
+  if (conn.isConnected()) {
+    Serial.println("Wi-Fi and ThingsBoard connected.");
+    
+    // CRITICAL: We must now listen for the attribute update
+    // that ThingsBoard sends on connect.
+    Serial.println("Listening for firmware version...");
+    conn.loop(); // Process incoming messages
+    delay(1000); // Wait 1 second for the message to arrive
+    conn.loop(); // Process it (this is when onMqttMessage will run)
+    
+    return true;
+  } else {
+    Serial.println("Failed to connect to ThingsBoard!");
+    return false;
+  }
 }
 
-// --- Main Loop ---
-void loop() {
-  // Main loop for the connection manager (handles MQTT keep-alive)
-  conn.loop();
+void sendTelemetryData() {
+  // Create a JSON payload for telemetry
+  JsonDocument telemetry_doc;
+  
+  // Battery Data
+  telemetry_doc["batt_voltage"] = batt.getVoltage();
+  telemetry_doc["batt_percent"] = batt.getPercentage();
 
-  // Send initial attributes ONCE after connecting
-  if (conn.isConnected() && !attributes_sent) {
+  // SHT30 "External" Data
+  telemetry_doc["ext_temp"] = sht.getTemperature();
+  telemetry_doc["ext_hum"] = sht.getHumidity();
+
+  // Connection Data
+  telemetry_doc["rssi"] = conn.getRSSI();
+
+  // Chimney Probe
+  float chimneyTemp = chimney.getTemperature();
+  if (!isnan(chimneyTemp)) {
+    telemetry_doc["chimney_temp"] = chimneyTemp;
+  }
+
+  char json_payload[300];
+  serializeJson(telemetry_doc, json_payload);
+  
+  conn.sendTelemetryJson(json_payload);
+}
+
+void goToSleep() {
+  Serial.printf("--- GOING TO SLEEP for %llu seconds ---\n\n", SLEEP_DURATION_S);
+  Serial.flush(); // Ensure all serial messages are sent
+
+  // Configure the timer wake-up source
+  // (You need to define SLEEP_DURATION_S in config.h)
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP_US); 
+
+  // Enter deep sleep
+  esp_deep_sleep_start();
+}
+
+
+// --- MQTT Message Callback ---
+// (This is unchanged from your original code)
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  Serial.println("---");
+  Serial.print("Message arrived on topic: ");
+  Serial.println(topic);
+
+  char message[length + 1];
+  memcpy(message, payload, length);
+  message[length] = '\0';
+  Serial.print("Message: ");
+  Serial.println(message);
+
+  if (strcmp(topic, "v1/devices/me/attributes") == 0) {
     JsonDocument doc;
-    doc["fw_title"] = FIRMWARE_TITLE;
-    doc["fw_version"] = FIRMWARE_VERSION;
-    doc["fw_state"] = "IDLE"; // Report that we are ready
-    
-    char json_payload[150];
-    serializeJson(doc, json_payload);
-    
-    conn.sendAttributes(json_payload);
-    attributes_sent = true;
-  }
+    deserializeJson(doc, message);
 
-  // Send telemetry data every SEND_INTERVAL_MS
-  if (millis() - lastSend > SEND_INTERVAL_MS && conn.isConnected()) {
-    lastSend = millis();
+    if (doc["fw_version"].is<const char*>()) {
+      const char* fw_title = doc["fw_title"];
+      const char* fw_version = doc["fw_version"];
+      
+      Serial.printf("Received new firmware info. Title: %s, Version: %s\n", fw_title, fw_version);
 
-    // Create a JSON payload for telemetry
-    JsonDocument telemetry_doc;
-    
-    // --- Telemetry Section Updated ---
-    
-    // Remove mock data
-    // telemetry_doc["temperature"] = random(18, 25) + random(0, 100) / 100.0f; 
-    // telemetry_doc["humidity"] = random(40, 60) + random(0, 100) / 100.0f;    
-
-    // Battery Data
-    telemetry_doc["batt_voltage"] = batt.getVoltage();
-    telemetry_doc["batt_percent"] = batt.getPercentage();
-
-    // SHT30 "External" Data
-    telemetry_doc["ext_temp"] = sht.getTemperature();
-    telemetry_doc["ext_hum"] = sht.getHumidity();
-
-    // Connection Data
-    telemetry_doc["rssi"] = conn.getRSSI();
-
-    // Add the REAL Chimney Temperature
-    float chimneyTemp = chimney.getTemperature();
-    // Only add to JSON if the reading is valid (not NAN)
-    if (!isnan(chimneyTemp)) {
-      telemetry_doc["chimney_temp"] = chimneyTemp;
+      if (strcmp(fw_version, FIRMWARE_VERSION) != 0) {
+        Serial.println("New firmware detected! Starting OTA update process...");
+        // Note: performOtaUpdate will restart the device.
+        conn.performOtaUpdate(fw_title, fw_version);
+      } else {
+        Serial.println("Firmware is already up to date.");
+      }
     }
-    // --- End of Update ---
-
-    char json_payload[300]; // Increased buffer size slightly
-    serializeJson(telemetry_doc, json_payload);
-    
-    Serial.println("Sending telemetry...");
-    conn.sendTelemetryJson(json_payload);
   }
 }
-
