@@ -45,7 +45,7 @@ void setup() {
   // Connect to Wi-Fi & ThingsBoard.
   // This function now waits until attributes are received or it times out.
   if (connectAll()) {
-    
+    //test
     // If the code reaches this point, it means connectAll() finished.
     // The OTA check will have already happened inside onMqttMessage.
     
