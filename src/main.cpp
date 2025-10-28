@@ -12,6 +12,13 @@
 #include "ShtManager.h"
 #include "ChimneyProbe.h"
 
+// --- Global Variable Definitions ---
+// (Declared as 'extern' in config.h)
+const char* WIFI_SSID = "Stev125";
+const char* WIFI_PASS = "theletterRed7#!";
+const char* TB_MQTT_HOST = "mqtt.thingsboard.cloud";
+const char* TB_DEVICE_TOKEN = "yvwb2bf3s1pxkzgwtudc";
+
 // --- Global Objects ---
 ConnectionManager conn(TB_MQTT_HOST, TB_MQTT_PORT, TB_HTTP_HOST);
 BatteryManager batt;
@@ -128,8 +135,8 @@ bool connectAll() {
 
   // Wait for connection
   unsigned long connect_start = millis();
-  while (!conn.isConnected() && (millis() - connect_start < 15000)) {
-    // Wait up to 15 seconds to connect
+  while (!conn.isConnected() && (millis() - connect_start < CONNECT_TIMEOUT_MS)) {
+    // Wait up to CONNECT_TIMEOUT_MS to connect
     conn.loop();
     delay(100);
   }
@@ -157,8 +164,8 @@ bool connectAll() {
     Serial.println("Listening for firmware version (waiting for attributes response)...");
     
     unsigned long listen_start = millis();
-    // Wait for the attributes_received flag, or for a 5-second timeout
-    while (attributes_received == false && (millis() - listen_start < 5000)) {
+    // Wait for the attributes_received flag, or for a timeout
+    while (attributes_received == false && (millis() - listen_start < ATTRIBUTE_WAIT_TIMEOUT_MS)) {
       conn.loop(); // This is what triggers onMqttMessage
       delay(10);   // Small delay to prevent busy-looping
     }
@@ -260,30 +267,15 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
       const char* fw_title = doc["shared"]["fw_title"];
       const char* fw_version_from_server = doc["shared"]["fw_version"];
       
-      // --- START DEBUGGING ---
-      Serial.println("--- OTA DEBUG ---");
-      Serial.printf("Server version: >%s<\n", fw_version_from_server);
-      Serial.printf("Device version: >%s<\n", FIRMWARE_VERSION);
-      
-      // Print the raw bytes of each string to check for hidden chars
-      Serial.print("Server bytes: ");
-      for(int i=0; i<strlen(fw_version_from_server); i++) { Serial.printf("%02X ", fw_version_from_server[i]); }
-      Serial.println();
-      
-      Serial.print("Device bytes: ");
-      // <-- FIX: Changed iVScode< to i<
-      for(int i=0; i<strlen(FIRMWARE_VERSION); i++) { Serial.printf("%02X ", FIRMWARE_VERSION[i]); }
-      Serial.println();
-      // --- END DEBUGGING ---
-      
-      Serial.printf("Received firmware info. Title: %s, Version: %s\n", fw_title, fw_version_from_server);
+      Serial.printf("Received firmware info. Title: '%s', Version: '%s'\n", fw_title, fw_version_from_server);
+      Serial.println("Comparing firmware versions...");
+      Serial.printf(" -> Server: '%s' | Device: '%s'\n", fw_version_from_server, FIRMWARE_VERSION);
 
       // Compare with our current version
       if (strcmp(fw_version_from_server, FIRMWARE_VERSION) != 0) {
         Serial.println("New firmware detected! Starting OTA update process...");
         // This function will download, apply, and restart the device.
         // The code will not proceed to sendTelemetryData() or goToSleep().
-        // <-- FIX: Changed performOtoUpdate to performOtaUpdate
         conn.performOtaUpdate(fw_title, fw_version_from_server);
       } else {
         Serial.println("Firmware is already up to date.");

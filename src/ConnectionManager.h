@@ -34,7 +34,7 @@ public:
 
   // OTA methods
   void sendFwState(const char* state, const char* error = "");
-  void performOtaUpdate(String title, String version);
+  void performOtaUpdate(const char* title, const char* version);
 
   // Connection Status
   long getRSSI();
@@ -50,12 +50,12 @@ private:
   const char* wifi_ssid;
   const char* wifi_pass;
   const char* device_token; // Stored token
+  unsigned long lastReconnectAttempt = 0; // For non-blocking reconnect
 
   // Topics
   const char* telemetry_topic = "v1/devices/me/telemetry";
   const char* attribute_topic = "v1/devices/me/attributes";
   const char* rpc_topic = "v1/devices/me/rpc/request/+";
-  const char* attributes_sub_topic = "v1/devices/me/attributes";
   
   // --- ADDED: Topics for attribute request/response ---
   const char* attributes_req_topic = "v1/devices/me/attributes/request/1";

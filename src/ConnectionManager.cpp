@@ -8,6 +8,7 @@
 #include <functional>
 #include <PubSubClient.h>
 
+#include "config.h" // Project-wide settings and constants
 #include "ConnectionManager.h"
 #include <ArduinoJson.h> 
 #include <HTTPClient.h>
@@ -70,42 +71,46 @@ void ConnectionManager::setCallback(MQTT_CALLBACK_SIGNATURE) {
   this->mqttClient.setCallback(callback);
 }
 
-// Reconnect logic for MQTT
+// Reconnect logic for MQTT, now non-blocking
 void ConnectionManager::reconnect() {
-  // Loop until we're reconnected
-  while (!mqttClient.connected()) {
-    Serial.print("Attempting MQTT connection...");
+  Serial.print("Attempting MQTT connection...");
+  
+  // Attempt to connect using the stored device token
+  if (mqttClient.connect("ESP32Client", this->device_token, NULL)) {
+    Serial.println("connected");
     
-    // Attempt to connect using the stored device token
-    if (mqttClient.connect("ESP32Client", this->device_token, NULL)) {
-      Serial.println("connected");
-      
-      // Subscribe to RPC requests
-      mqttClient.subscribe(rpc_topic);
-      Serial.println("Subscribed to RPC topic");
+    // Subscribe to RPC requests
+    mqttClient.subscribe(rpc_topic);
+    Serial.println("Subscribed to RPC topic");
 
-      // We must ALSO subscribe to shared attribute updates for OTA
-      mqttClient.subscribe(attributes_sub_topic);
-      Serial.println("Subscribed to Shared Attributes topic");
+    // We must ALSO subscribe to shared attribute updates for OTA
+    mqttClient.subscribe(attribute_topic);
+    Serial.println("Subscribed to Shared Attributes topic");
 
-      // --- FIX: Subscribe to the response topic ON CONNECT ---
-      mqttClient.subscribe(attributes_resp_topic);
-      Serial.println("Subscribed to Attributes Response topic");
+    // Subscribe to the response topic for attribute requests
+    mqttClient.subscribe(attributes_resp_topic);
+    Serial.println("Subscribed to Attributes Response topic");
 
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" try again in 5 seconds");
-      delay(5000);
-    }
+  } else {
+    Serial.print("failed, rc=");
+    Serial.print(mqttClient.state());
+    Serial.println(" try again in 5 seconds");
+    // Note: The delay is now handled in the main loop()
   }
 }
 
-// Main loop: keeps the client connected
+// Main loop: keeps the client connected and handles reconnects
 void ConnectionManager::loop() {
   if (!mqttClient.connected()) {
-    reconnect();
+    unsigned long now = millis();
+    // Check if MQTT_RECONNECT_WAIT_MS has passed since last attempt
+    if (now - lastReconnectAttempt > MQTT_RECONNECT_WAIT_MS) {
+      lastReconnectAttempt = now;
+      reconnect();
+    }
   }
+  // mqttClient.loop() should be called continuously to process messages
+  // and maintain the connection.
   mqttClient.loop();
 }
 
@@ -158,25 +163,35 @@ void ConnectionManager::requestAttributes() {
 
 
 // --- OTA FUNCTION (PULL METHOD - C-String ONLY) ---
-// Performs the Over-The-Air update
-void ConnectionManager::performOtaUpdate(String title, String version) {
+// Performs the Over-The-Air update using memory-safe C-strings
+void ConnectionManager::performOtaUpdate(const char* title, const char* version) {
   
-  // 1. URL-encode title and version.
-  String title_encoded_str = title;
-  title_encoded_str.replace(" ", "%20");
-  String version_encoded_str = version;
-  version_encoded_str.replace(" ", "%20");
+  // 1. URL-encode title and version into temporary, stack-allocated buffers.
+  // This is a safe way to handle it without using the String class, which can cause heap fragmentation.
+  char title_encoded[128];
+  char version_encoded[64];
 
-  const char* title_encoded = title_encoded_str.c_str();
-  const char* version_encoded = version_encoded_str.c_str();
+  // Simple URL-encoding for spaces (' ' -> '%20')
+  char* t_out = title_encoded;
+  for (const char* t_in = title; *t_in && t_out < title_encoded + sizeof(title_encoded) - 4; t_in++) {
+    if (*t_in == ' ') { *t_out++ = '%'; *t_out++ = '2'; *t_out++ = '0'; }
+    else { *t_out++ = *t_in; }
+  }
+  *t_out = '\0';
+
+  char* v_out = version_encoded;
+  for (const char* v_in = version; *v_in && v_out < version_encoded + sizeof(version_encoded) - 4; v_in++) {
+    if (*v_in == ' ') { *v_out++ = '%'; *v_out++ = '2'; *v_out++ = '0'; }
+    else { *v_out++ = *v_in; }
+  }
+  *v_out = '\0';
 
   // 2. Build the URL as a C-style string with the token in the path
   // FORMAT: https://{host}/api/v1/{token}/firmware?title={title}&version={version}
-  size_t urlLen = strlen("https://") + strlen(this->http_host) + strlen("/api/v1/") + strlen(this->device_token) + strlen("/firmware?title=") + strlen(title_encoded) + strlen("&version=") + strlen(version_encoded) + 1;
-  char url[urlLen];
-  snprintf(url, urlLen, "https://%s/api/v1/%s/firmware?title=%s&version=%s",
+  char url[512]; // Use a fixed, larger buffer for safety
+  snprintf(url, sizeof(url), "https://%s/api/v1/%s/firmware?title=%s&version=%s",
            this->http_host,
-           this->device_token, // <-- TOKEN IS NOW PART OF THE URL
+           this->device_token,
            title_encoded,
            version_encoded);
   

@@ -31,19 +31,31 @@
 #define FIRMWARE_TITLE "Test Firmware"
 
 // --- Wi-Fi Credentials ---
-const char* WIFI_SSID = "Stev125";
-const char* WIFI_PASS = "theletterRed7#!";
+extern const char* WIFI_SSID;
+extern const char* WIFI_PASS;
 
 
 // --- ThingsBoard Professional Cloud details ---
 // The host is "mqtt.thingsboard.cloud"
-const char* TB_MQTT_HOST = "mqtt.thingsboard.cloud";
+extern const char* TB_MQTT_HOST;
 const int   TB_MQTT_PORT = 1883; 
 #define TB_HTTP_HOST "thingsboard.cloud"
 
 // --- Device Credentials ---
-const char* TB_DEVICE_TOKEN = "yvwb2bf3s1pxkzgwtudc";
+extern const char* TB_DEVICE_TOKEN;
 
+
+// --- Hardware Pin Definitions ---
+// Moved from ChimneyProbe.h for centralization
+#define CHIMNEY_SCK_PIN 5  // Feather SCK pin
+#define CHIMNEY_SO_PIN 21 // Feather MISO (MI) pin
+#define CHIMNEY_CS_PIN 4  // Feather A5 (GPIO 4)
+
+
+// --- Connection & Timeout Settings ---
+const unsigned long CONNECT_TIMEOUT_MS = 15000;
+const unsigned long ATTRIBUTE_WAIT_TIMEOUT_MS = 5000;
+const unsigned long MQTT_RECONNECT_WAIT_MS = 5000;
 
 
 // --- Data Sending Interval ---

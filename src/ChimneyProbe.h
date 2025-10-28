@@ -9,16 +9,7 @@
 
 #include <Arduino.h>
 #include "max6675.h" // From Adafruit MAX6675 Library
-
-// --- Pin Definitions for MAX6675 Chimney Probe ---
-// (Moved from main.cpp as requested)
-//
-// Feather SCK pin
-#define CHIMNEY_SCK_PIN 5
-// Feather MISO (MI) pin
-#define CHIMNEY_SO_PIN 21
-// Feather A5 (GPIO 4)
-#define CHIMNEY_CS_PIN 4
+#include "config.h"    // Centralized hardware settings
 
 
 class ChimneyProbe {
