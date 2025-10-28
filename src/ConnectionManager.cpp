@@ -65,8 +65,7 @@ void ConnectionManager::connectThingsboard(const char* device_token) {
   reconnect(); // Perform the initial connection
 }
 
-// Set the callback for MQTT messages (no extra "callback" variable)
-// This implementation is correct.
+// Set the callback for MQTT messages
 void ConnectionManager::setCallback(MQTT_CALLBACK_SIGNATURE) {
   this->mqttClient.setCallback(callback);
 }
@@ -88,6 +87,10 @@ void ConnectionManager::reconnect() {
       // We must ALSO subscribe to shared attribute updates for OTA
       mqttClient.subscribe(attributes_sub_topic);
       Serial.println("Subscribed to Shared Attributes topic");
+
+      // --- FIX: Subscribe to the response topic ON CONNECT ---
+      mqttClient.subscribe(attributes_resp_topic);
+      Serial.println("Subscribed to Attributes Response topic");
 
     } else {
       Serial.print("failed, rc=");
@@ -133,6 +136,26 @@ bool ConnectionManager::sendAttributes(const char* json_payload) {
   Serial.println(json_payload);
   return mqttClient.publish(attribute_topic, json_payload);
 }
+
+/**
+ * @brief Publishes a request for shared attributes.
+ * Assumes connection and subscription are already handled.
+ */
+void ConnectionManager::requestAttributes() {
+  JsonDocument doc;
+  // We only care about shared keys for OTA
+  doc["sharedKeys"] = "fw_version,fw_title"; 
+  
+  char json_payload[100];
+  serializeJson(doc, json_payload);
+
+  Serial.println("Requesting shared attributes from server...");
+  
+  // Publish to the request topic with ID 1
+  // (Subscription is handled in reconnect())
+  mqttClient.publish(attributes_req_topic, json_payload);
+}
+
 
 // --- OTA FUNCTION (PULL METHOD - C-String ONLY) ---
 // Performs the Over-The-Air update
@@ -258,3 +281,4 @@ long ConnectionManager::getRSSI() {
     }
     return 0; // Return 0 if not connected
 }
+

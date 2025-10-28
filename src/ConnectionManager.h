@@ -30,6 +30,7 @@ public:
   bool sendTelemetry(const char* key, float value);
   bool sendTelemetryJson(const char* json_payload);
   bool sendAttributes(const char* json_payload);
+  void requestAttributes(); // Request shared attributes from server
 
   // OTA methods
   void sendFwState(const char* state, const char* error = "");
@@ -55,6 +56,11 @@ private:
   const char* attribute_topic = "v1/devices/me/attributes";
   const char* rpc_topic = "v1/devices/me/rpc/request/+";
   const char* attributes_sub_topic = "v1/devices/me/attributes";
+  
+  // --- ADDED: Topics for attribute request/response ---
+  const char* attributes_req_topic = "v1/devices/me/attributes/request/1";
+  const char* attributes_resp_topic = "v1/devices/me/attributes/response/+";
+
 
   // Clients
   WiFiClient espClient;

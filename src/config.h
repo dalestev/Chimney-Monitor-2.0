@@ -27,7 +27,7 @@
 #define CONFIG_H
 
 // Firmware Version
-#define FIRMWARE_VERSION "1.1.5"
+#define FIRMWARE_VERSION "1.1.6"
 #define FIRMWARE_TITLE "Test Firmware"
 
 // --- Wi-Fi Credentials ---
@@ -56,7 +56,7 @@ const unsigned long SEND_INTERVAL_MS = 10000;
 // This is the new "interval". How long to sleep between readings (in seconds).
 // 600 seconds = 10 minutes
 // 3600 seconds = 1 hour
-const uint64_t SLEEP_DURATION_S = 10; 
+const uint64_t SLEEP_DURATION_S = 30; 
     
 // Convert seconds to microseconds for the timer
 #define uS_TO_S_FACTOR 1000000ULL 
